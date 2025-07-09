@@ -2,18 +2,20 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+
+	"JWT/config"
 
 	"github.com/golang-jwt/jwt"
 )
 
-var jwtKey = []byte("secret_key")
+var jwtKey = []byte(config.JWTSecret)
 
-var users = map[string]string{
-	"john_doe":  "password1",
-	"alice_bob": "password2",
-}
+var tokenExpiryMinutes = config.TokenExpiryMinutes
+
+var users = config.Users
 
 type Credentials struct {
 	Username string `json:"username"`
@@ -29,13 +31,16 @@ type Claims struct {
 func writeResponse(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	w.Write([]byte(message))
+	if status >= 400 {
+		fmt.Printf("Handler error [%d]: %s\n", status, message)
+	}
 }
 
 // Utility to extract and validate JWT token
 func getClaimsFromToken(r *http.Request) (*Claims, error) {
 	cookie, err := r.Cookie("token")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("missing or invalid token cookie: %w", err)
 	}
 
 	tokenStr := cookie.Value
@@ -44,8 +49,11 @@ func getClaimsFromToken(r *http.Request) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
 		return jwtKey, nil
 	})
-	if err != nil || !token.Valid {
-		return nil, err
+	if err != nil {
+		return nil, fmt.Errorf("JWT parse error: %w", err)
+	}
+	if !token.Valid {
+		return nil, fmt.Errorf("JWT token is not valid")
 	}
 
 	return claims, nil
@@ -55,7 +63,7 @@ func getClaimsFromToken(r *http.Request) (*Claims, error) {
 func Home(w http.ResponseWriter, r *http.Request) {
 	claims, err := getClaimsFromToken(r)
 	if err != nil {
-		writeResponse(w, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
+		writeResponse(w, http.StatusUnauthorized, "Unauthorized: "+err.Error())
 		return
 	}
 
@@ -66,17 +74,21 @@ func Home(w http.ResponseWriter, r *http.Request) {
 func Login(w http.ResponseWriter, r *http.Request) {
 	var creds Credentials
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-		writeResponse(w, http.StatusBadRequest, "Invalid request payload")
+		writeResponse(w, http.StatusBadRequest, "Invalid request payload: "+err.Error())
 		return
 	}
 
 	expectedPassword, ok := users[creds.Username]
-	if !ok || expectedPassword != creds.Password {
-		writeResponse(w, http.StatusUnauthorized, "Invalid credentials")
+	if !ok {
+		writeResponse(w, http.StatusUnauthorized, "Invalid credentials: user does not exist")
+		return
+	}
+	if expectedPassword != creds.Password {
+		writeResponse(w, http.StatusUnauthorized, "Invalid credentials: wrong password")
 		return
 	}
 
-	expirationTime := time.Now().Add(5 * time.Minute)
+	expirationTime := time.Now().Add(time.Duration(tokenExpiryMinutes) * time.Minute)
 	claims := &Claims{
 		Username: creds.Username,
 		StandardClaims: jwt.StandardClaims{
@@ -86,7 +98,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	tokenStr, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtKey)
 	if err != nil {
-		writeResponse(w, http.StatusInternalServerError, "Could not create token")
+		writeResponse(w, http.StatusInternalServerError, "Could not create token: "+err.Error())
 		return
 	}
 
@@ -105,7 +117,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 func Refresh(w http.ResponseWriter, r *http.Request) {
 	claims, err := getClaimsFromToken(r)
 	if err != nil {
-		writeResponse(w, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
+		writeResponse(w, http.StatusUnauthorized, "Unauthorized: "+err.Error())
 		return
 	}
 
@@ -115,10 +127,10 @@ func Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims.ExpiresAt = time.Now().Add(5 * time.Minute).Unix()
+	claims.ExpiresAt = time.Now().Add(time.Duration(tokenExpiryMinutes) * time.Minute).Unix()
 	tokenStr, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtKey)
 	if err != nil {
-		writeResponse(w, http.StatusInternalServerError, "Could not refresh token")
+		writeResponse(w, http.StatusInternalServerError, "Could not refresh token: "+err.Error())
 		return
 	}
 

@@ -68,11 +68,16 @@ handlers/main.go  # Handler functions for each endpoint
    ```bash
    go mod tidy
    ```
-3. Run the server:
+3. Set up your environment variables in a `.env` file (see `.env.example`).
+  
+   ```bash
+   export $(grep -v '^#' .env | xargs)
+   ```
+4. Run the server:
    ```bash
    go run main.go
    ```
-4. The server will start on `http://localhost:8080`
+5. The server will start on `http://localhost:8080`
 
 ---
 
